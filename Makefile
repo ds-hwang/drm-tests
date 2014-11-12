@@ -7,12 +7,15 @@ OUT ?= $(PWD)/build-opt-local
 
 include common.mk
 
+PC_DEPS = libdrm egl libgbm
+PC_CFLAGS := $(shell $(PKG_CONFIG) --cflags $(PC_DEPS))
+PC_LIBS := $(shell $(PKG_CONFIG) --libs $(PC_DEPS))
+
 DRM_LIBS = -lGLESv2
+CFLAGS += $(PC_CFLAGS)
+LDLIBS += $(PC_LIBS)
 
-all: CC_BINARY(egl_chromesim_modified) CC_BINARY(egl_clear)
+all: CC_BINARY(null_platform_test)
 
-CC_BINARY(egl_chromesim_modified): egl_chromesim_modified.o egl_init.o
-CC_BINARY(egl_chromesim_modified): LDLIBS += $(DRM_LIBS)
-
-CC_BINARY(egl_clear): egl_clear.o egl_init.o
-CC_BINARY(egl_clear): LDLIBS += $(DRM_LIBS)
+CC_BINARY(null_platform_test): null_platform_test.o
+CC_BINARY(null_platform_test): LDLIBS += $(DRM_LIBS)
