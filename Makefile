@@ -7,7 +7,7 @@ OUT ?= $(PWD)/build-opt-local
 
 include common.mk
 
-PC_DEPS = libdrm egl libgbm
+PC_DEPS = libdrm egl gbm
 PC_CFLAGS := $(shell $(PKG_CONFIG) --cflags $(PC_DEPS))
 PC_LIBS := $(shell $(PKG_CONFIG) --libs $(PC_DEPS))
 
