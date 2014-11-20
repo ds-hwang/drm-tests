@@ -1,3 +1,9 @@
+/*
+ * Copyright 2014 The Chromium OS Authors. All rights reserved.
+ * Use of this source code is governed by a BSD-style license that can be
+ * found in the LICENSE file.
+ */
+
 #include <errno.h>
 #include <fcntl.h>
 #include <stdbool.h>
@@ -22,17 +28,17 @@ const char * get_gl_error()
 {
 	switch (glGetError()) {
 	case GL_NO_ERROR:
-		return "No error has been recorded.";
+		return "GL_NO_ERROR";
 	case GL_INVALID_ENUM:
-		return "An unacceptable value is specified for an enumerated argument. The offending command is ignored and has no other side effect than to set the error flag.";
+		return "GL_INVALID_ENUM";
 	case GL_INVALID_VALUE:
-		return "A numeric argument is out of range. The offending command is ignored and has no other side effect than to set the error flag.";
+		return "GL_INVALID_VALUE";
 	case GL_INVALID_OPERATION:
-		return "The specified operation is not allowed in the current state. The offending command is ignored and has no other side effect than to set the error flag.";
+		return "GL_INVALID_OPERATION";
 	case GL_INVALID_FRAMEBUFFER_OPERATION:
-		return "The command is trying to render to or read from the framebuffer while the currently bound framebuffer is not framebuffer complete (i.e. the return value from glCheckFramebufferStatus is not GL_FRAMEBUFFER_COMPLETE). The offending command is ignored and has no other side effect than to set the error flag.";
+		return "GL_INVALID_FRAMEBUFFER_OPERATION";
 	case GL_OUT_OF_MEMORY:
-		return "There is not enough memory left to execute the command. The state of the GL is undefined, except for the state of the error flags, after this error is recorded.";
+		return "GL_OUT_OF_MEMORY";
 	default:
 		return "Unknown error";
 	}
@@ -42,56 +48,58 @@ const char * get_egl_error()
 {
 	switch (eglGetError()) {
 	case EGL_SUCCESS:
-		return "The last function succeeded without error.";
+		return "EGL_SUCCESS";
 	case EGL_NOT_INITIALIZED:
-		return "EGL is not initialized, or could not be initialized, for the specified EGL display connection.";
+		return "EGL_NOT_INITIALIZED";
 	case EGL_BAD_ACCESS:
-		return "EGL cannot access a requested resource (for example a context is bound in another thread).";
+		return "EGL_BAD_ACCESS";
 	case EGL_BAD_ALLOC:
-		return "EGL failed to allocate resources for the requested operation.";
+		return "EGL_BAD_ALLOC";
 	case EGL_BAD_ATTRIBUTE:
-		return "An unrecognized attribute or attribute value was passed in the attribute list.";
+		return "EGL_BAD_ATTRIBUTE";
 	case EGL_BAD_CONTEXT:
-		return "An EGLContext argument does not name a valid EGL rendering context.";
+		return "EGL_BAD_CONTEXT";
 	case EGL_BAD_CONFIG:
-		return "An EGLConfig argument does not name a valid EGL frame buffer configuration.";
+		return "EGL_BAD_CONFIG";
 	case EGL_BAD_CURRENT_SURFACE:
-		return "The current surface of the calling thread is a window, pixel buffer or pixmap that is no longer valid.";
+		return "EGL_BAD_CURRENT_SURFACE";
 	case EGL_BAD_DISPLAY:
-		return "An EGLDisplay argument does not name a valid EGL display connection.";
+		return "EGL_BAD_DISPLAY";
 	case EGL_BAD_SURFACE:
-		return "An EGLSurface argument does not name a valid surface (window, pixel buffer or pixmap) configured for GL rendering.";
+		return "EGL_BAD_SURFACE";
 	case EGL_BAD_MATCH:
-		return "Arguments are inconsistent (for example, a valid context requires buffers not supplied by a valid surface).";
+		return "EGL_BAD_MATCH";
 	case EGL_BAD_PARAMETER:
-		return "One or more argument values are invalid.";
+		return "EGL_BAD_PARAMETER";
 	case EGL_BAD_NATIVE_PIXMAP:
-		return "A NativePixmapType argument does not refer to a valid native pixmap.";
+		return "EGL_BAD_NATIVE_PIXMAP";
 	case EGL_BAD_NATIVE_WINDOW:
-		return "A NativeWindowType argument does not refer to a valid native window.";
+		return "EGL_BAD_NATIVE_WINDOW";
 	case EGL_CONTEXT_LOST:
-		return "A power management event has occurred. The application must destroy all contexts and reinitialise OpenGL ES state and objects to continue rendering.";
+		return "EGL_CONTEXT_LOST";
 	default:
 		return "Unknown error";
 	}
 }
 
+#define BUFFERS 2
+
 struct context {
 	int card_fd;
 	struct gbm_device * gbm_dev;
-	struct gbm_bo * gbm_buffer;
 
 	EGLDisplay egl_display;
 	EGLContext egl_ctx;
-	EGLImageKHR egl_image;
 
 	drmModeConnector * connector;
 	drmModeEncoder * encoder;
 	drmModeModeInfo * mode;
-	uint32_t drm_fb_id;
 
-	unsigned gl_fb;
-	unsigned gl_rb;
+	struct gbm_bo * gbm_buffer[BUFFERS];
+	EGLImageKHR egl_image[BUFFERS];
+	uint32_t drm_fb_id[BUFFERS];
+	unsigned gl_fb[BUFFERS];
+	unsigned gl_rb[BUFFERS];
 
 };
 
@@ -188,6 +196,13 @@ float f(int i) {
 	}
 }
 
+static void page_flip_handler(int fd, unsigned int frame, unsigned int sec,
+			      unsigned int usec, void *data)
+{
+	int *waiting_for_flip = data;
+	*waiting_for_flip = 0;
+}
+
 void draw(struct context * ctx)
 {
 	int i;
@@ -250,11 +265,9 @@ void draw(struct context * ctx)
 		return;
 	}
 
-
-	glViewport(0, 0,(GLint) ctx->mode->hdisplay,
-		(GLint) ctx->mode->vdisplay);
-
+	int fb_idx = 1;
 	for (i = 0; i <= 500; i++) {
+		int waiting_for_flip = 1;
 		GLfloat verts[] = {
 			0.0f, -0.5f, 0.0f,
 			-0.5f, 0.5f, 0.0f,
@@ -265,6 +278,10 @@ void draw(struct context * ctx)
 			0.0f, 1.0f, 0.0f, 1.0f,
 			0.0f, 0.0f, 1.0f, 1.0f
 		};
+
+		glBindFramebuffer(GL_FRAMEBUFFER, ctx->gl_fb[fb_idx]);
+		glViewport(0, 0,(GLint) ctx->mode->hdisplay,
+			(GLint) ctx->mode->vdisplay);
 
 		glClearColor(f(i), f(i + 80), f(i + 160), 0.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
@@ -279,7 +296,35 @@ void draw(struct context * ctx)
 		usleep(1e6 / 120); /* 120 Hz */
 		glFinish();
 		drmModePageFlip(ctx->card_fd, ctx->encoder->crtc_id,
-				ctx->drm_fb_id, 0, NULL);
+				ctx->drm_fb_id[fb_idx],
+				DRM_MODE_PAGE_FLIP_EVENT,
+				&waiting_for_flip);
+
+		while (waiting_for_flip) {
+			drmEventContext evctx = {
+				.version = DRM_EVENT_CONTEXT_VERSION,
+				.page_flip_handler = page_flip_handler,
+			};
+
+			fd_set fds;
+			FD_ZERO(&fds);
+			FD_SET(0, &fds);
+			FD_SET(ctx->card_fd, &fds);
+
+			int ret = select(ctx->card_fd + 1, &fds, NULL, NULL, NULL);
+			if (ret < 0) {
+				fprintf(stderr, "select err: %s\n", strerror(errno));
+				return;
+			} else if (ret == 0) {
+				fprintf(stderr, "select timeout\n");
+				return;
+			} else if (FD_ISSET(0, &fds)) {
+				fprintf(stderr, "user interrupted\n");
+				return;
+			}
+			drmHandleEvent(ctx->card_fd, &evctx);
+		}
+		fb_idx = fb_idx ^ 1;
 	}
 
 	glDeleteProgram(program);
@@ -296,6 +341,7 @@ int main(int argc, char ** argv)
 	int drm_prime_fd;
 	EGLint num_configs;
 	EGLConfig egl_config;
+	size_t i;
 	char* card_path = "/dev/dri/card1";
 
 	const EGLint config_attribs[] = {
@@ -399,93 +445,96 @@ int main(int argc, char ** argv)
 
 	fprintf(stderr, "GL extensions: %s\n", glGetString(GL_EXTENSIONS));
 
-	ctx.gbm_buffer = gbm_bo_create(ctx.gbm_dev,
-		ctx.mode->hdisplay, ctx.mode->vdisplay, GBM_BO_FORMAT_XRGB8888,
-		GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
+	glGenFramebuffers(BUFFERS, ctx.gl_fb);
+	glGenRenderbuffers(BUFFERS, ctx.gl_rb);
 
-	if (!ctx.gbm_buffer) {
-		fprintf(stderr, "failed to create buffer object\n");
-		ret = 1;
-		goto destroy_context;
+	for (i = 0; i < BUFFERS; ++i) {
+		ctx.gbm_buffer[i] = gbm_bo_create(ctx.gbm_dev,
+			ctx.mode->hdisplay, ctx.mode->vdisplay, GBM_BO_FORMAT_XRGB8888,
+			GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
+
+		if (!ctx.gbm_buffer[i]) {
+			fprintf(stderr, "failed to create buffer object\n");
+			ret = 1;
+			goto free_buffers;
+		}
+
+		bo_handle = gbm_bo_get_handle(ctx.gbm_buffer[i]).u32;
+		bo_stride = gbm_bo_get_stride(ctx.gbm_buffer[i]);
+
+		if (drmPrimeHandleToFD(ctx.card_fd, bo_handle, DRM_CLOEXEC,
+				&drm_prime_fd))	{
+			fprintf(stderr, "failed to turn handle into fd\n");
+			ret = 1;
+			goto free_buffers;
+		}
+
+		const EGLint khr_image_attrs[] = {
+			EGL_WIDTH, ctx.mode->hdisplay,
+			EGL_HEIGHT, ctx.mode->vdisplay,
+			EGL_LINUX_DRM_FOURCC_EXT, DRM_FORMAT_XRGB8888,
+			EGL_DMA_BUF_PLANE0_FD_EXT, drm_prime_fd,
+			EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0,
+			EGL_DMA_BUF_PLANE0_PITCH_EXT, bo_stride,
+			EGL_NONE
+		};
+
+		ctx.egl_image[i] = eglCreateImageKHR(ctx.egl_display, EGL_NO_CONTEXT,
+			EGL_LINUX_DMA_BUF_EXT, NULL, khr_image_attrs);
+		if (ctx.egl_image[i] == EGL_NO_IMAGE_KHR) {
+			fprintf(stderr, "failed to create egl image: %s\n",
+				get_egl_error());
+			ret = 1;
+			goto free_buffers;
+		}
+
+		glBindRenderbuffer(GL_RENDERBUFFER, ctx.gl_rb[i]);
+		glBindFramebuffer(GL_FRAMEBUFFER, ctx.gl_fb[i]);
+		glEGLImageTargetRenderbufferStorageOES(GL_RENDERBUFFER, ctx.egl_image[i]);
+		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+			GL_RENDERBUFFER, ctx.gl_rb[i]);
+
+		if (glCheckFramebufferStatus(GL_FRAMEBUFFER) !=
+				GL_FRAMEBUFFER_COMPLETE) {
+			fprintf(stderr, "failed to create framebuffer: %s\n", get_gl_error());
+			ret = 1;
+			goto free_buffers;
+		}
+
+		ret = drmModeAddFB(ctx.card_fd, ctx.mode->hdisplay, ctx.mode->vdisplay,
+			24, 32, bo_stride, bo_handle, &ctx.drm_fb_id[i]);
+
+		if (ret) {
+			fprintf(stderr, "failed to add fb\n");
+			ret = 1;
+			goto free_buffers;
+		}
 	}
 
-	bo_handle = gbm_bo_get_handle(ctx.gbm_buffer).u32;
-	bo_stride = gbm_bo_get_stride(ctx.gbm_buffer);
-
-	if (drmPrimeHandleToFD(ctx.card_fd, bo_handle, DRM_CLOEXEC,
-			&drm_prime_fd))	{
-		fprintf(stderr, "failed to turn handle into fd\n");
-		ret = 1;
-		goto destroy_buffer;
-	}
-
-	glGenFramebuffers(1, &ctx.gl_fb);
-	glBindFramebuffer(GL_FRAMEBUFFER, ctx.gl_fb);
-	glGenRenderbuffers(1, &ctx.gl_rb);
-	glBindRenderbuffer(GL_RENDERBUFFER, ctx.gl_rb);
-
-	const EGLint khr_image_attrs[] = {
-		EGL_WIDTH, ctx.mode->hdisplay,
-		EGL_HEIGHT, ctx.mode->vdisplay,
-		EGL_LINUX_DRM_FOURCC_EXT, DRM_FORMAT_XRGB8888,
-		EGL_DMA_BUF_PLANE0_FD_EXT, drm_prime_fd,
-		EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0,
-		EGL_DMA_BUF_PLANE0_PITCH_EXT, bo_stride,
-		EGL_NONE
-	};
-
-	ctx.egl_image = eglCreateImageKHR(ctx.egl_display, EGL_NO_CONTEXT,
-		EGL_LINUX_DMA_BUF_EXT, NULL, khr_image_attrs);
-	if (ctx.egl_image == EGL_NO_IMAGE_KHR) {
-		fprintf(stderr, "failed to create egl image: %s\n",
-			get_egl_error());
-		ret = 1;
-		goto delete_gl_buffers;
-	}
-
-	glEGLImageTargetRenderbufferStorageOES(GL_RENDERBUFFER, ctx.egl_image);
-	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-		GL_RENDERBUFFER, ctx.gl_rb);
-
-	if (glCheckFramebufferStatus(GL_FRAMEBUFFER) !=
-			GL_FRAMEBUFFER_COMPLETE) {
-		fprintf(stderr, "failed to create framebuffer: %s\n", get_gl_error());
-		ret = 1;
-		goto destroy_image;
-	}
-
-	ret = drmModeAddFB(ctx.card_fd, ctx.mode->hdisplay, ctx.mode->vdisplay,
-		24, 32, bo_stride, bo_handle, &ctx.drm_fb_id);
-
-	if (ret) {
-		fprintf(stderr, "failed to add fb\n");
-		ret = 1;
-		goto destroy_image;
-	}
-
-	fprintf(stderr, "drm fb id: %d\n", ctx.drm_fb_id);
-        fprintf(stderr, "calling drmModeSetCrtc with crtc_id = %d\n", ctx.encoder->crtc_id);
-
-	if (drmModeSetCrtc(ctx.card_fd, ctx.encoder->crtc_id, ctx.drm_fb_id,
+	if (drmModeSetCrtc(ctx.card_fd, ctx.encoder->crtc_id, ctx.drm_fb_id[0],
 			0, 0, &ctx.connector->connector_id, 1, ctx.mode)) {
 		fprintf(stderr, "failed to set CRTC\n");
 		ret = 1;
-		goto remove_fb;
+		goto free_buffers;
 	}
 
 	draw(&ctx);
 
-remove_fb:
-	drmModeRmFB(ctx.card_fd, ctx.drm_fb_id);
-destroy_image:
-	eglDestroyImageKHR(ctx.egl_display, ctx.egl_image);
-delete_gl_buffers:
+free_buffers:
 	glBindRenderbuffer(GL_RENDERBUFFER, 0);
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
-	glDeleteFramebuffers(1, &ctx.gl_fb);
-	glDeleteRenderbuffers(1, &ctx.gl_rb);
-destroy_buffer:
-	gbm_bo_destroy(ctx.gbm_buffer);
+	for (i = 0; i < BUFFERS; ++i) {
+		if (ctx.drm_fb_id[i])
+			drmModeRmFB(ctx.card_fd, ctx.drm_fb_id[i]);
+		if (ctx.egl_image[i])
+			eglDestroyImageKHR(ctx.egl_display, ctx.egl_image[i]);
+		if (ctx.gl_fb[i])
+			glDeleteFramebuffers(1, &ctx.gl_fb[i]);
+		if (ctx.gl_rb[i])
+			glDeleteRenderbuffers(1, &ctx.gl_rb[i]);
+		if (ctx.gbm_buffer[i])
+			gbm_bo_destroy(ctx.gbm_buffer[i]);
+	}
 destroy_context:
 	eglDestroyContext(ctx.egl_display, ctx.egl_ctx);
 free_drm:
