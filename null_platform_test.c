@@ -85,8 +85,10 @@ const char * get_egl_error()
 #define BUFFERS 2
 
 struct context {
-	int card_fd;
-	struct gbm_device * gbm_dev;
+	int drm_card_fd;
+	int egl_card_fd;
+	struct gbm_device *drm_gbm;
+	struct gbm_device *egl_gbm;
 
 	EGLDisplay egl_display;
 	EGLContext egl_ctx;
@@ -105,7 +107,7 @@ struct context {
 
 bool setup_drm(struct context * ctx)
 {
-	int fd = ctx->card_fd;
+	int fd = ctx->drm_card_fd;
 	drmModeRes *resources = NULL;
 	drmModeConnector *connector = NULL;
 	drmModeEncoder *encoder = NULL;
@@ -295,7 +297,7 @@ void draw(struct context * ctx)
 
 		usleep(1e6 / 120); /* 120 Hz */
 		glFinish();
-		drmModePageFlip(ctx->card_fd, ctx->encoder->crtc_id,
+		drmModePageFlip(ctx->drm_card_fd, ctx->encoder->crtc_id,
 				ctx->drm_fb_id[fb_idx],
 				DRM_MODE_PAGE_FLIP_EVENT,
 				&waiting_for_flip);
@@ -309,9 +311,9 @@ void draw(struct context * ctx)
 			fd_set fds;
 			FD_ZERO(&fds);
 			FD_SET(0, &fds);
-			FD_SET(ctx->card_fd, &fds);
+			FD_SET(ctx->drm_card_fd, &fds);
 
-			int ret = select(ctx->card_fd + 1, &fds, NULL, NULL, NULL);
+			int ret = select(ctx->drm_card_fd + 1, &fds, NULL, NULL, NULL);
 			if (ret < 0) {
 				fprintf(stderr, "select err: %s\n", strerror(errno));
 				return;
@@ -322,7 +324,7 @@ void draw(struct context * ctx)
 				fprintf(stderr, "user interrupted\n");
 				return;
 			}
-			drmHandleEvent(ctx->card_fd, &evctx);
+			drmHandleEvent(ctx->drm_card_fd, &evctx);
 		}
 		fb_idx = fb_idx ^ 1;
 	}
@@ -342,7 +344,9 @@ int main(int argc, char ** argv)
 	EGLint num_configs;
 	EGLConfig egl_config;
 	size_t i;
-	char* card_path = "/dev/dri/card1";
+	char* egl_card_path = "/dev/dri/card0";
+	char* drm_card_path = "/dev/dri/card1";
+	bool single_card = false;
 
 	const EGLint config_attribs[] = {
 		EGL_RED_SIZE, 1,
@@ -357,28 +361,51 @@ int main(int argc, char ** argv)
 		EGL_NONE
 	};
 
-	if (argc >= 2)
-		card_path = argv[1];
+	if (argc >= 2) {
+		drm_card_path = argv[1];
+		if (strcmp(egl_card_path, drm_card_path) == 0) {
+			single_card = true;
+		}
+	}
 
-	ctx.card_fd = open(card_path, O_RDWR);
-	if (ctx.card_fd < 0) {
-		fprintf(stderr, "failed to open %s\n", card_path);
+	ctx.drm_card_fd = open(drm_card_path, O_RDWR);
+	if (ctx.drm_card_fd < 0) {
+		fprintf(stderr, "failed to open %s\n", drm_card_path);
 		ret = 1;
 		goto fail;
 	}
 
-	ctx.gbm_dev = gbm_create_device(ctx.card_fd);
-	if (!ctx.gbm_dev) {
-		fprintf(stderr, "failed to create gbm device\n");
+	ctx.drm_gbm = gbm_create_device(ctx.drm_card_fd);
+	if (!ctx.drm_gbm) {
+		fprintf(stderr, "failed to create gbm device on %s\n", drm_card_path);
 		ret = 1;
-		goto close_card;
+		goto close_drm_card;
 	}
 
-	ctx.egl_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+	if (single_card) {
+		ctx.egl_card_fd = ctx.drm_card_fd;
+		ctx.egl_gbm = ctx.drm_gbm;
+	} else {
+		ctx.egl_card_fd = open(egl_card_path, O_RDWR);
+		if (ctx.egl_card_fd < 0) {
+			fprintf(stderr, "failed to open %s\n", egl_card_path);
+			ret = 1;
+			goto destroy_drm_gbm;
+		}
+
+		ctx.egl_gbm = gbm_create_device(ctx.egl_card_fd);
+		if (!ctx.egl_gbm) {
+			fprintf(stderr, "failed to create gbm device on %s\n", egl_card_path);
+			ret = 1;
+			goto close_egl_card;
+		}
+	}
+
+	ctx.egl_display = eglGetDisplay((EGLNativeDisplayType)(intptr_t)ctx.egl_card_fd);
 	if (ctx.egl_display == EGL_NO_DISPLAY) {
 		fprintf(stderr, "failed to get egl display\n");
 		ret = 1;
-		goto destroy_device;
+		goto destroy_egl_gbm;
 	}
 
 	if (!eglInitialize(ctx.egl_display, &egl_major, &egl_minor)) {
@@ -449,7 +476,7 @@ int main(int argc, char ** argv)
 	glGenRenderbuffers(BUFFERS, ctx.gl_rb);
 
 	for (i = 0; i < BUFFERS; ++i) {
-		ctx.gbm_buffer[i] = gbm_bo_create(ctx.gbm_dev,
+		ctx.gbm_buffer[i] = gbm_bo_create(ctx.drm_gbm,
 			ctx.mode->hdisplay, ctx.mode->vdisplay, GBM_BO_FORMAT_XRGB8888,
 			GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
 
@@ -462,7 +489,7 @@ int main(int argc, char ** argv)
 		bo_handle = gbm_bo_get_handle(ctx.gbm_buffer[i]).u32;
 		bo_stride = gbm_bo_get_stride(ctx.gbm_buffer[i]);
 
-		if (drmPrimeHandleToFD(ctx.card_fd, bo_handle, DRM_CLOEXEC,
+		if (drmPrimeHandleToFD(ctx.drm_card_fd, bo_handle, DRM_CLOEXEC,
 				&drm_prime_fd))	{
 			fprintf(stderr, "failed to turn handle into fd\n");
 			ret = 1;
@@ -501,7 +528,7 @@ int main(int argc, char ** argv)
 			goto free_buffers;
 		}
 
-		ret = drmModeAddFB(ctx.card_fd, ctx.mode->hdisplay, ctx.mode->vdisplay,
+		ret = drmModeAddFB(ctx.drm_card_fd, ctx.mode->hdisplay, ctx.mode->vdisplay,
 			24, 32, bo_stride, bo_handle, &ctx.drm_fb_id[i]);
 
 		if (ret) {
@@ -511,7 +538,7 @@ int main(int argc, char ** argv)
 		}
 	}
 
-	if (drmModeSetCrtc(ctx.card_fd, ctx.encoder->crtc_id, ctx.drm_fb_id[0],
+	if (drmModeSetCrtc(ctx.drm_card_fd, ctx.encoder->crtc_id, ctx.drm_fb_id[0],
 			0, 0, &ctx.connector->connector_id, 1, ctx.mode)) {
 		fprintf(stderr, "failed to set CRTC\n");
 		ret = 1;
@@ -525,7 +552,7 @@ free_buffers:
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 	for (i = 0; i < BUFFERS; ++i) {
 		if (ctx.drm_fb_id[i])
-			drmModeRmFB(ctx.card_fd, ctx.drm_fb_id[i]);
+			drmModeRmFB(ctx.drm_card_fd, ctx.drm_fb_id[i]);
 		if (ctx.egl_image[i])
 			eglDestroyImageKHR(ctx.egl_display, ctx.egl_image[i]);
 		if (ctx.gl_fb[i])
@@ -542,10 +569,16 @@ free_drm:
 	drmModeFreeEncoder(ctx.encoder);
 terminate_display:
 	eglTerminate(ctx.egl_display);
-destroy_device:
-	gbm_device_destroy(ctx.gbm_dev);
-close_card:
-	close(ctx.card_fd);
+destroy_egl_gbm:
+	if (!single_card)
+		gbm_device_destroy(ctx.egl_gbm);
+close_egl_card:
+	if (!single_card)
+		close(ctx.egl_card_fd);
+destroy_drm_gbm:
+	gbm_device_destroy(ctx.drm_gbm);
+close_drm_card:
+	close(ctx.drm_card_fd);
 fail:
 	return ret;
 }
