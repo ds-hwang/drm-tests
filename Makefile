@@ -15,9 +15,12 @@ DRM_LIBS = -lGLESv2
 CFLAGS += $(PC_CFLAGS)
 LDLIBS += $(PC_LIBS)
 
-all: CC_BINARY(null_platform_test) CC_BINARY(vgem_test)
+all: CC_BINARY(null_platform_test) CC_BINARY(vgem_test) CC_BINARY(swrast_test)
 
 CC_BINARY(null_platform_test): null_platform_test.o
 CC_BINARY(null_platform_test): LDLIBS += $(DRM_LIBS)
 
 CC_BINARY(vgem_test): vgem_test.o
+
+CC_BINARY(swrast_test): swrast_test.o
+CC_BINARY(swrast_test): LDLIBS += -lGLESv2
