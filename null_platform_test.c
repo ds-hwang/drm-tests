@@ -82,6 +82,23 @@ const char * get_egl_error()
 	}
 }
 
+static bool has_extension(const char *extension, const char *extensions)
+{
+	const char *start, *where, *terminator;
+	start = extensions;
+	for (;;) {
+		where = (char *)strstr((const char *)start, extension);
+		if (!where)
+			break;
+		terminator = where + strlen(extension);
+		if (where == start || *(where - 1) == ' ')
+			if (*terminator == ' ' || *terminator == '\0')
+				return true;
+		start = terminator;
+	}
+	return false;
+}
+
 #define BUFFERS 2
 
 struct context {
@@ -335,7 +352,8 @@ int main(int argc, char ** argv)
 	int ret = 0;
 	struct context ctx;
 	EGLint egl_major, egl_minor;
-	const char * extensions;
+	const char * egl_extensions;
+	const char * gl_extensions;
 	uint32_t bo_handle;
 	uint32_t bo_stride;
 	int drm_prime_fd;
@@ -343,6 +361,9 @@ int main(int argc, char ** argv)
 	EGLConfig egl_config;
 	size_t i;
 	char* drm_card_path = "/dev/dri/card0";
+	PFNEGLCREATEIMAGEKHRPROC pfeglCreateImageKHR;
+	PFNEGLDESTROYIMAGEKHRPROC pfeglDestroyImageKHR;
+	PFNGLEGLIMAGETARGETRENDERBUFFERSTORAGEOESPROC pfglEGLImageTargetRenderbufferStorageOES;
 
 	const EGLint config_attribs[] = {
 		EGL_RED_SIZE, 1,
@@ -392,8 +413,8 @@ int main(int argc, char ** argv)
 	fprintf(stderr, "EGL %s\n",
 		eglQueryString(ctx.egl_display, EGL_VERSION));
 
-	extensions = eglQueryString(ctx.egl_display, EGL_EXTENSIONS);
-	fprintf(stderr, "EGL Extensions: %s\n", extensions);
+	egl_extensions = eglQueryString(ctx.egl_display, EGL_EXTENSIONS);
+	fprintf(stderr, "EGL Extensions: %s\n", egl_extensions);
 
 	if (!setup_drm(&ctx)) {
 		fprintf(stderr, "failed to setup drm resources\n");
@@ -443,7 +464,29 @@ int main(int argc, char ** argv)
 		goto destroy_context;
 	}
 
-	fprintf(stderr, "GL extensions: %s\n", glGetString(GL_EXTENSIONS));
+	gl_extensions = (const char *)glGetString(GL_EXTENSIONS);
+	fprintf(stderr, "GL extensions: %s\n", gl_extensions);
+
+	if (!has_extension("EGL_EXT_image_dma_buf_import", egl_extensions)) {
+		fprintf(stderr, "EGL_EXT_image_dma_buf_import extension not supported\n");
+		ret = 1;
+		goto destroy_context;
+	}
+
+	if (!has_extension("GL_OES_EGL_image", gl_extensions)) {
+		fprintf(stderr, "GL_OES_EGL_image extension not supported\n");
+		ret = 1;
+		goto destroy_context;
+	}
+
+	pfeglCreateImageKHR = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
+	pfeglDestroyImageKHR = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
+	pfglEGLImageTargetRenderbufferStorageOES = (PFNGLEGLIMAGETARGETRENDERBUFFERSTORAGEOESPROC)eglGetProcAddress("glEGLImageTargetRenderbufferStorageOES");
+	if (!pfeglCreateImageKHR || !pfeglDestroyImageKHR || !pfglEGLImageTargetRenderbufferStorageOES) {
+		fprintf(stderr, "eglGetProcAddress returned NULL for a required extension entry point\n");
+		ret = 1;
+		goto destroy_context;
+	}
 
 	glGenFramebuffers(BUFFERS, ctx.gl_fb);
 	glGenRenderbuffers(BUFFERS, ctx.gl_rb);
@@ -480,7 +523,7 @@ int main(int argc, char ** argv)
 			EGL_NONE
 		};
 
-		ctx.egl_image[i] = eglCreateImageKHR(ctx.egl_display, EGL_NO_CONTEXT,
+		ctx.egl_image[i] = pfeglCreateImageKHR(ctx.egl_display, EGL_NO_CONTEXT,
 			EGL_LINUX_DMA_BUF_EXT, NULL, khr_image_attrs);
 		if (ctx.egl_image[i] == EGL_NO_IMAGE_KHR) {
 			fprintf(stderr, "failed to create egl image: %s\n",
@@ -491,7 +534,7 @@ int main(int argc, char ** argv)
 
 		glBindRenderbuffer(GL_RENDERBUFFER, ctx.gl_rb[i]);
 		glBindFramebuffer(GL_FRAMEBUFFER, ctx.gl_fb[i]);
-		glEGLImageTargetRenderbufferStorageOES(GL_RENDERBUFFER, ctx.egl_image[i]);
+		pfglEGLImageTargetRenderbufferStorageOES(GL_RENDERBUFFER, ctx.egl_image[i]);
 		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
 			GL_RENDERBUFFER, ctx.gl_rb[i]);
 
@@ -528,7 +571,7 @@ free_buffers:
 		if (ctx.drm_fb_id[i])
 			drmModeRmFB(ctx.drm_card_fd, ctx.drm_fb_id[i]);
 		if (ctx.egl_image[i])
-			eglDestroyImageKHR(ctx.egl_display, ctx.egl_image[i]);
+			pfeglDestroyImageKHR(ctx.egl_display, ctx.egl_image[i]);
 		if (ctx.gl_fb[i])
 			glDeleteFramebuffers(1, &ctx.gl_fb[i]);
 		if (ctx.gl_rb[i])
