@@ -423,7 +423,7 @@ int main(int argc, char ** argv)
 	}
 
 	ctx.egl_ctx = eglCreateContext(ctx.egl_display,
-		NULL /* No framebuffer */,
+		egl_config,
 		EGL_NO_CONTEXT /* No shared context */,
 		context_attribs);
 	if (ctx.egl_ctx == EGL_NO_CONTEXT) {
