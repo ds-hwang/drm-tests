@@ -86,9 +86,7 @@ const char * get_egl_error()
 
 struct context {
 	int drm_card_fd;
-	int egl_card_fd;
 	struct gbm_device *drm_gbm;
-	struct gbm_device *egl_gbm;
 
 	EGLDisplay egl_display;
 	EGLContext egl_ctx;
@@ -344,9 +342,7 @@ int main(int argc, char ** argv)
 	EGLint num_configs;
 	EGLConfig egl_config;
 	size_t i;
-	char* egl_card_path = "/dev/dri/card0";
-	char* drm_card_path = "/dev/dri/card1";
-	bool single_card = false;
+	char* drm_card_path = "/dev/dri/card0";
 
 	const EGLint config_attribs[] = {
 		EGL_RED_SIZE, 1,
@@ -361,12 +357,8 @@ int main(int argc, char ** argv)
 		EGL_NONE
 	};
 
-	if (argc >= 2) {
+	if (argc >= 2)
 		drm_card_path = argv[1];
-		if (strcmp(egl_card_path, drm_card_path) == 0) {
-			single_card = true;
-		}
-	}
 
 	ctx.drm_card_fd = open(drm_card_path, O_RDWR);
 	if (ctx.drm_card_fd < 0) {
@@ -382,30 +374,11 @@ int main(int argc, char ** argv)
 		goto close_drm_card;
 	}
 
-	if (single_card) {
-		ctx.egl_card_fd = ctx.drm_card_fd;
-		ctx.egl_gbm = ctx.drm_gbm;
-	} else {
-		ctx.egl_card_fd = open(egl_card_path, O_RDWR);
-		if (ctx.egl_card_fd < 0) {
-			fprintf(stderr, "failed to open %s\n", egl_card_path);
-			ret = 1;
-			goto destroy_drm_gbm;
-		}
-
-		ctx.egl_gbm = gbm_create_device(ctx.egl_card_fd);
-		if (!ctx.egl_gbm) {
-			fprintf(stderr, "failed to create gbm device on %s\n", egl_card_path);
-			ret = 1;
-			goto close_egl_card;
-		}
-	}
-
-	ctx.egl_display = eglGetDisplay((EGLNativeDisplayType)(intptr_t)ctx.egl_card_fd);
+	ctx.egl_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
 	if (ctx.egl_display == EGL_NO_DISPLAY) {
 		fprintf(stderr, "failed to get egl display\n");
 		ret = 1;
-		goto destroy_egl_gbm;
+		goto destroy_drm_gbm;
 	}
 
 	if (!eglInitialize(ctx.egl_display, &egl_major, &egl_minor)) {
@@ -570,12 +543,6 @@ free_drm:
 	drmModeFreeEncoder(ctx.encoder);
 terminate_display:
 	eglTerminate(ctx.egl_display);
-destroy_egl_gbm:
-	if (!single_card)
-		gbm_device_destroy(ctx.egl_gbm);
-close_egl_card:
-	if (!single_card)
-		close(ctx.egl_card_fd);
 destroy_drm_gbm:
 	gbm_device_destroy(ctx.drm_gbm);
 close_drm_card:
