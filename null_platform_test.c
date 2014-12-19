@@ -24,7 +24,7 @@
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 
-const char * get_gl_error()
+static const char * get_gl_error(void)
 {
 	switch (glGetError()) {
 	case GL_NO_ERROR:
@@ -44,7 +44,7 @@ const char * get_gl_error()
 	}
 }
 
-const char * get_egl_error()
+static const char * get_egl_error(void)
 {
 	switch (eglGetError()) {
 	case EGL_SUCCESS:
@@ -120,7 +120,7 @@ struct context {
 
 };
 
-bool setup_drm(struct context * ctx)
+static bool setup_drm(struct context * ctx)
 {
 	int fd = ctx->drm_card_fd;
 	drmModeRes *resources = NULL;
@@ -194,7 +194,8 @@ bool setup_drm(struct context * ctx)
 	return true;
 }
 
-float f(int i) {
+static float f(int i)
+{
 	int a = i % 40;
 	int b = (i / 40) % 6;
 	switch (b) {
@@ -220,7 +221,7 @@ static void page_flip_handler(int fd, unsigned int frame, unsigned int sec,
 	*waiting_for_flip = 0;
 }
 
-void draw(struct context * ctx)
+static void draw(struct context * ctx)
 {
 	int i;
 	const GLchar *vertexShaderStr =
