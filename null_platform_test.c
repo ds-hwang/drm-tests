@@ -489,8 +489,9 @@ int main(int argc, char ** argv)
 		bo_handle = gbm_bo_get_handle(ctx.gbm_buffer[i]).u32;
 		bo_stride = gbm_bo_get_stride(ctx.gbm_buffer[i]);
 
-		if (drmPrimeHandleToFD(ctx.drm_card_fd, bo_handle, DRM_CLOEXEC,
-				&drm_prime_fd))	{
+		drm_prime_fd = gbm_bo_get_fd(ctx.gbm_buffer[i]);
+
+		if (drm_prime_fd < 0) {
 			fprintf(stderr, "failed to turn handle into fd\n");
 			ret = 1;
 			goto free_buffers;
