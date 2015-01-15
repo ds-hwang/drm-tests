@@ -138,7 +138,7 @@ bool verify_pattern(volatile uint32_t * bo_ptr, size_t bo_size)
 	volatile uint32_t * ptr;
 	for (ptr = bo_ptr; ptr < bo_ptr + (bo_size / sizeof(*bo_ptr)); ptr++) {
 		if (*ptr != g_bo_pattern) {
-			fprintf(stderr, "buffer object verify " FAIL_COLOR " at offset 0x%lX = 0x%X\n",
+			fprintf(stderr, "buffer object verify " FAIL_COLOR " at offset %td = 0x%X\n",
 				(void *)ptr - (void *)bo_ptr, *ptr);
 			return false;
 		}
