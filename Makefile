@@ -15,7 +15,7 @@ DRM_LIBS = -lGLESv2
 CFLAGS += $(PC_CFLAGS)
 LDLIBS += $(PC_LIBS)
 
-all: CC_BINARY(null_platform_test) CC_BINARY(vgem_test) CC_BINARY(vgem_fb_test) CC_BINARY(swrast_test)
+all: CC_BINARY(null_platform_test) CC_BINARY(vgem_test) CC_BINARY(vgem_fb_test) CC_BINARY(swrast_test) CC_BINARY(atomictest)
 
 CC_BINARY(null_platform_test): null_platform_test.o
 CC_BINARY(null_platform_test): LDLIBS += $(DRM_LIBS)
@@ -25,3 +25,7 @@ CC_BINARY(vgem_fb_test): vgem_fb_test.o
 
 CC_BINARY(swrast_test): swrast_test.o
 CC_BINARY(swrast_test): LDLIBS += -lGLESv2
+
+CC_BINARY(atomictest): atomictest.o bo.o dev.o modeset.o
+CC_BINARY(atomictest): CFLAGS += -DUSE_ATOMIC_API
+CC_BINARY(atomictest): LDLIBS += $(DRM_LIBS)
