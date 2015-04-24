@@ -90,7 +90,7 @@ int main(int argc, char *argv[])
 			goto out;
 		}
 
-		fill_bo(plane[i]->bo, 0xFF, 0xFF, 0xFF, 0xFF);
+		fill_bo(plane[i]->bo, 0xFF, 0x00, 0x00, 0xFF);
 	}
 
 	pset = drmModePropertySetAlloc();
@@ -130,6 +130,8 @@ int main(int argc, char *argv[])
 
 		if (FD_ISSET(dev->fd, &fds))
 			drmHandleEvent(dev->fd, &event_context);
+
+		usleep(1e6 / 120); /* 120 Hz */
 	}
 
 	drmModePropertySetFree(pset);

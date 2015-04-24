@@ -12,7 +12,7 @@
 
 int initialize_screens(struct sp_dev *dev)
 {
-	int ret, i, j;
+	int ret, i, j, k;
 
 	for (i = 0; i < dev->num_connectors; i++) {
 		drmModeConnectorPtr c = dev->connectors[i];
@@ -40,35 +40,36 @@ int initialize_screens(struct sp_dev *dev)
 			break;
 		}
 
-		if (!c->encoder_id) {
-			printf("no encoder attached to the connector\n");
-			continue;
-		}
-
 		for (j = 0; j < dev->num_encoders; j++) {
 			e = dev->encoders[j];
-			if (e->encoder_id == c->encoder_id)
+			if (!e)
+				continue;
+			for (k = 0; k < c->count_encoders; k++) {
+				if (e->encoder_id == c->encoders[k])
+					break;
+			}
+			if (k < c->count_encoders)
 				break;
 		}
+
 		if (j == dev->num_encoders) {
-			printf("could not find encoder for the connector\n");
+			printf("could not find supported encoder for the connector\n");
 			continue;
 		}
 
-		if (!e->crtc_id) {
-			printf("no crtc attached to the encoder\n");
-			continue;
-		}
 		for (j = 0; j < dev->num_crtcs; j++) {
 			cr = &dev->crtcs[j];
-
-			if (cr->crtc->crtc_id == e->crtc_id)
+			if (e->possible_crtcs & (1 << j)) {
+				e->crtc_id = cr->crtc->crtc_id;
 				break;
+			}
 		}
+
 		if (j == dev->num_crtcs) {
 			printf("could not find crtc for the encoder\n");
 			continue;
 		}
+
 		if (cr->scanout) {
 			printf("crtc already in use\n");
 			continue;
@@ -82,7 +83,7 @@ int initialize_screens(struct sp_dev *dev)
 			continue;
 		}
 
-		fill_bo(cr->scanout, 0xFF, 0xFF, 0xFF, 0xFF);
+		fill_bo(cr->scanout, 0xFF, 0xFF, 0xFF, 0x00);
 
 		ret = drmModeSetCrtc(dev->fd, cr->crtc->crtc_id,
 				cr->scanout->fb_id, 0, 0, &c->connector_id,
@@ -91,6 +92,9 @@ int initialize_screens(struct sp_dev *dev)
 			printf("failed to set crtc mode ret=%d\n", ret);
 			continue;
 		}
+
+		cr->crtc->mode.hdisplay = m->hdisplay;
+		cr->crtc->mode.vdisplay = m->vdisplay;
 	}
 	return 0;
 }
