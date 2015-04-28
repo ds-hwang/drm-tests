@@ -40,6 +40,26 @@ struct context {
 
 };
 
+void disable_psr() {
+	const char psr_path[] = "/sys/module/i915/parameters/enable_psr";
+	int psr_fd = open(psr_path, O_WRONLY);
+
+	if (psr_fd < 0)
+		return;
+
+	if (write(psr_fd, "0", 1) == -1) {
+		fprintf(stderr, "failed to disable psr\n");
+	} else {
+		fprintf(stderr, "disabled psr\n");
+	}
+
+	close(psr_fd);
+}
+
+void do_fixes() {
+	disable_psr();
+}
+
 const char g_sys_card_path_format[] =
    "/sys/bus/platform/devices/vgem/drm/card%d";
 const char g_dev_card_path_format[] =
@@ -298,6 +318,8 @@ int main(int argc, char **argv)
 
 	if (argc >= 2)
 		drm_card_path = argv[1];
+
+	do_fixes();
 
 	ctx.drm_card_fd = open(drm_card_path, O_RDWR);
 	if (ctx.drm_card_fd < 0) {
