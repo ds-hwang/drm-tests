@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
@@ -98,7 +99,7 @@ struct sp_bo *create_sp_bo(struct sp_dev *dev, uint32_t width, uint32_t height,
 		uint32_t depth, uint32_t bpp, uint32_t format, uint32_t flags)
 {
 	int ret;
-	struct drm_mode_create_dumb cd;
+	struct drm_mode_create_dumb cd = {};
 	struct sp_bo *bo;
 
 	bo = calloc(1, sizeof(*bo));

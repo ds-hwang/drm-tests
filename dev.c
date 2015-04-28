@@ -3,6 +3,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <string.h>
+#include <sys/types.h>
+#include <dirent.h>
 
 #include <drm.h>
 #include <drm_fourcc.h>
@@ -49,14 +51,17 @@ static int get_supported_format(struct sp_plane *plane, uint32_t *format)
 	return -ENOENT;
 }
 
-struct sp_dev *create_sp_dev(void)
+static struct sp_dev *create_sp_dev_from_name(char *name)
 {
 	struct sp_dev *dev;
 	int ret, fd, i, j;
 	drmModeRes *r = NULL;
 	drmModePlaneRes *pr = NULL;
+	char devPath[PATH_MAX];
 
-	fd = open("/dev/dri/card0", O_RDWR);
+	strcpy(devPath, "/dev/dri/");
+	strcat(devPath, name);
+	fd = open(devPath, O_RDWR);
 	if (fd < 0) {
 		printf("failed to open card0\n");
 		return NULL;
@@ -235,6 +240,29 @@ err:
 		drmModeFreeResources(r);
 	destroy_sp_dev(dev);
 	return NULL;
+}
+
+struct sp_dev *create_sp_dev(void)
+{
+	struct dirent de, *pde;
+	struct sp_dev *dev = NULL;
+	DIR *dir = opendir("/dev/dri");
+	int res;
+
+	if (!dir)
+		return NULL;
+
+	while ((res = readdir_r(dir, &de, &pde)) == 0) {
+		if (!pde)
+			break;
+		if (de.d_type != DT_CHR)
+			continue;
+		dev = create_sp_dev_from_name(de.d_name);
+		if (dev)
+			break;
+	}
+	closedir(dir);
+	return dev;
 }
 
 void destroy_sp_dev(struct sp_dev *dev)
