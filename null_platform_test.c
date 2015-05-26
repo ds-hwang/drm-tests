@@ -372,6 +372,7 @@ int main(int argc, char ** argv)
 		EGL_BLUE_SIZE, 1,
 		EGL_DEPTH_SIZE, 1,
 		EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+		EGL_SURFACE_TYPE, EGL_DONT_CARE,
 		EGL_NONE
 	};
 	const EGLint context_attribs[] = {
