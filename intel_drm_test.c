@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -191,9 +192,24 @@ void show_sequence(const int *sequence)
 	fprintf(stderr, "\n");
 }
 
+double elapsed(const struct timeval *start, const struct timeval *end)
+{
+  return 1e6*(end->tv_sec - start->tv_sec) + (end->tv_usec - start->tv_usec);
+}
+
 void draw(struct context *ctx)
 {
 	int i;
+
+	struct timeval previous, current;
+	gettimeofday(&previous, NULL);
+	int count = 0;
+
+	double mmap_total_ut = 0.;
+	double unmap_total_ut = 0.;
+	double flip_total_ut = 0.;
+	double draw_total_ut = 0.;
+	struct timeval start, end;
 
 	// Run the drawing routine with the key driver events in different
 	// sequences.
@@ -220,7 +236,10 @@ void draw(struct context *ctx)
 			for (sequence_subindex = 0; sequence_subindex < 4; sequence_subindex++) {
 				switch (sequences[sequence_index][sequence_subindex]) {
 				case STEP_MMAP:
+				  gettimeofday(&start, NULL);
 					bo_ptr = (uint32_t*)mmap_intel_bo(ctx->intel_buffer[fb_idx]);
+					gettimeofday(&end, NULL);
+					mmap_total_ut += elapsed(&start, &end);
 					ptr = bo_ptr;
 					break;
 
@@ -229,13 +248,17 @@ void draw(struct context *ctx)
 					break;
 
 				case STEP_FLIP:
+				  gettimeofday(&start, NULL);
 					drmModePageFlip(ctx->drm_card_fd, ctx->encoder->crtc_id,
 						ctx->drm_fb_id[fb_idx],
 						0,
 						NULL);
+					gettimeofday(&end, NULL);
+					flip_total_ut += elapsed(&start, &end);
 					break;
 
 				case STEP_DRAW:
+				  gettimeofday(&start, NULL);
 					for (ptr = bo_ptr; ptr < bo_ptr + (bo_size / sizeof(*bo_ptr)); ptr++) {
 						int y = ((void*)ptr - (void*)bo_ptr) / bo_stride;
 						int x = ((void*)ptr - (void*)bo_ptr - bo_stride * y) / sizeof(*ptr);
@@ -247,6 +270,8 @@ void draw(struct context *ctx)
 						else
 							*ptr |= 0xff | (sequence_index * 64 << 16);
 					}
+					gettimeofday(&end, NULL);
+					draw_total_ut += elapsed(&start, &end);
 					break;
 
 				case STEP_SKIP:
@@ -255,9 +280,25 @@ void draw(struct context *ctx)
 				}
 			}
 
+			gettimeofday(&start, NULL);
 			drm_intel_bo_unmap(ctx->intel_buffer[fb_idx]);
+			gettimeofday(&end, NULL);
+			unmap_total_ut += elapsed(&start, &end);
 
-			usleep(1e6 / 120); /* 120 Hz */
+			count++;
+			gettimeofday(&current, NULL);
+			double delta = elapsed(&previous, &current);
+			if (delta > 1000000) {
+			  fprintf(stderr, "%.2f FPS. avg time (us)| mmap:%.2f unmap:%.2f flip:%.2f draw:%.2f\n",
+			          count / (delta / 1000000), mmap_total_ut / count, unmap_total_ut / count,
+			          flip_total_ut / count, draw_total_ut / count);
+			  count = 0;
+			  mmap_total_ut = 0.;
+			  unmap_total_ut = 0.;
+			  flip_total_ut = 0.;
+			  draw_total_ut = 0.;
+			  gettimeofday(&previous, NULL);
+			}
 
 			fb_idx = fb_idx ^ 1;
 		}
