@@ -22,21 +22,20 @@
 #include <drm_fourcc.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
+#include <libdrm/i915_drm.h>
+#include <libdrm/intel_bufmgr.h>
 
 #define BUFFERS 2
 
 struct context {
 	int drm_card_fd;
-	int vgem_card_fd;
-	struct gbm_device *drm_gbm;
-
+	drm_intel_bufmgr* buffer_manager;
 	drmModeRes *resources;
 	drmModeConnector *connector;
 	drmModeEncoder *encoder;
 	drmModeModeInfo *mode;
-
-	struct gbm_bo *gbm_buffer[BUFFERS];
-	uint32_t vgem_bo_handle[BUFFERS];
+	unsigned long stride;
+	drm_intel_bo *intel_buffer[BUFFERS];
 	uint32_t drm_fb_id[BUFFERS];
 
 };
@@ -66,56 +65,15 @@ const char g_sys_card_path_format[] =
 const char g_dev_card_path_format[] =
    "/dev/dri/card%d";
 
-int drm_open_vgem()
+void * mmap_intel_bo(drm_intel_bo *buffer)
 {
-	char *name;
-	int i, fd;
-
-	for (i = 0; i < 16; i++) {
-		struct stat _stat;
-		int ret;
-		ret = asprintf(&name, g_sys_card_path_format, i);
-		assert(ret != -1);
-
-		if (stat(name, &_stat) == -1) {
-			free(name);
-			continue;
-		}
-
-		free(name);
-		ret = asprintf(&name, g_dev_card_path_format, i);
-		assert(ret != -1);
-
-		fd = open(name, O_RDWR);
-		free(name);
-		if (fd == -1) {
-			continue;
-		}
-		return fd;
-	}
-	return -1;
-}
-
-void * mmap_dumb_bo(int fd, int handle, size_t size)
-{
-	struct drm_mode_map_dumb mmap_arg;
-	void *ptr;
-	int ret;
-
-	memset(&mmap_arg, 0, sizeof(mmap_arg));
-
-	mmap_arg.handle = handle;
-
-	ret = drmIoctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &mmap_arg);
-	assert(ret == 0);
-	assert(mmap_arg.offset != 0);
-
-	ptr = mmap(NULL, size, (PROT_READ|PROT_WRITE), MAP_SHARED, fd,
-		   mmap_arg.offset);
-
-	assert(ptr != MAP_FAILED);
-
-	return ptr;
+  int error = drm_intel_bo_map(buffer, 1);
+  if (error) {
+    fprintf(stderr, "fail to map a drm buffer\n");
+    return NULL;
+  }
+  assert(buffer->virtual);
+	return buffer->virtual;
 }
 
 bool setup_drm(struct context *ctx)
@@ -270,8 +228,8 @@ void draw(struct context *ctx)
 	for (sequence_index = 0; sequence_index < 4; sequence_index++) {
 		show_sequence(sequences[sequence_index]);
 		for (i = 0; i < 0x100; i++) {
-			size_t bo_stride = gbm_bo_get_stride(ctx->gbm_buffer[fb_idx]);
-			size_t bo_size = gbm_bo_get_stride(ctx->gbm_buffer[fb_idx]) * gbm_bo_get_height(ctx->gbm_buffer[fb_idx]);
+			size_t bo_stride = ctx->stride;
+			size_t bo_size = ctx->stride * ctx->mode->vdisplay;
 			uint32_t *bo_ptr;
 			volatile uint32_t *ptr;
 
@@ -279,7 +237,7 @@ void draw(struct context *ctx)
 				switch (sequences[sequence_index][sequence_subindex]) {
 				case STEP_MMAP:
 				  gettimeofday(&start, NULL);
-					bo_ptr = mmap_dumb_bo(ctx->vgem_card_fd, ctx->vgem_bo_handle[fb_idx], bo_size);
+					bo_ptr = (uint32_t*)mmap_intel_bo(ctx->intel_buffer[fb_idx]);
 					gettimeofday(&end, NULL);
 					mmap_total_ut += elapsed(&start, &end);
 					ptr = bo_ptr;
@@ -323,7 +281,7 @@ void draw(struct context *ctx)
 			}
 
 			gettimeofday(&start, NULL);
-			munmap(bo_ptr, bo_size);
+			drm_intel_bo_unmap(ctx->intel_buffer[fb_idx]);
 			gettimeofday(&end, NULL);
 			unmap_total_ut += elapsed(&start, &end);
 
@@ -351,9 +309,6 @@ int main(int argc, char **argv)
 {
 	int ret = 0;
 	struct context ctx;
-	uint32_t bo_handle;
-	uint32_t bo_stride;
-	int drm_prime_fd;
 	size_t i;
 	char *drm_card_path = "/dev/dri/card0";
 
@@ -369,62 +324,39 @@ int main(int argc, char **argv)
 		goto fail;
 	}
 
-	ctx.vgem_card_fd = drm_open_vgem();
-	if (ctx.vgem_card_fd < 0) {
-		fprintf(stderr, "failed to open vgem card\n");
-		ret = 1;
-		goto close_drm_card;
-	}
-
-	ctx.drm_gbm = gbm_create_device(ctx.drm_card_fd);
-	if (!ctx.drm_gbm) {
-		fprintf(stderr, "failed to create gbm device on %s\n", drm_card_path);
-		ret = 1;
-		goto close_vgem_card;
-	}
-
 	if (!setup_drm(&ctx)) {
 		fprintf(stderr, "failed to setup drm resources\n");
 		ret = 1;
-		goto destroy_drm_gbm;
+		goto fail;
 	}
 
 	fprintf(stderr, "display size: %dx%d\n",
 		ctx.mode->hdisplay, ctx.mode->vdisplay);
 
+	ctx.buffer_manager = drm_intel_bufmgr_gem_init(ctx.drm_card_fd, 16 * 4096);
+	if (!ctx.buffer_manager) {
+    fprintf(stderr, "drm_intel_bufmgr_gem_init failed\n");
+    goto fail;
+	}
 
 	for (i = 0; i < BUFFERS; ++i) {
-		ctx.gbm_buffer[i] = gbm_bo_create(ctx.drm_gbm,
-			ctx.mode->hdisplay, ctx.mode->vdisplay, GBM_BO_FORMAT_XRGB8888,
-			GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
+		uint32_t tiling_mode = I915_TILING_NONE;
+		unsigned long stride = 0;
+		ctx.intel_buffer[i] = drm_intel_bo_alloc_tiled(
+		    ctx.buffer_manager,
+		    "chromium-gpu-memory-buffer", ctx.mode->hdisplay, ctx.mode->vdisplay,
+		    4, &tiling_mode, &stride, 0);
 
-		if (!ctx.gbm_buffer[i]) {
+		if (!ctx.intel_buffer[i]) {
 			fprintf(stderr, "failed to create buffer object\n");
 			ret = 1;
 			goto free_buffers;
 		}
 
-		bo_handle = gbm_bo_get_handle(ctx.gbm_buffer[i]).u32;
-		bo_stride = gbm_bo_get_stride(ctx.gbm_buffer[i]);
-
-		drm_prime_fd = gbm_bo_get_fd(ctx.gbm_buffer[i]);
-
-		if (drm_prime_fd < 0) {
-			fprintf(stderr, "failed to turn handle into fd\n");
-			ret = 1;
-			goto free_buffers;
-		}
-
-		ret = drmPrimeFDToHandle(ctx.vgem_card_fd, drm_prime_fd,
-					 &ctx.vgem_bo_handle[i]);
-		if (ret) {
-			fprintf(stderr, "failed to import handle\n");
-			ret = 1;
-			goto free_buffers;
-		}
+		ctx.stride = stride;
 
 		ret = drmModeAddFB(ctx.drm_card_fd, ctx.mode->hdisplay, ctx.mode->vdisplay,
-			24, 32, bo_stride, bo_handle, &ctx.drm_fb_id[i]);
+			24, 32, stride, ctx.intel_buffer[i]->handle, &ctx.drm_fb_id[i]);
 
 		if (ret) {
 			fprintf(stderr, "failed to add fb\n");
@@ -446,17 +378,13 @@ free_buffers:
 	for (i = 0; i < BUFFERS; ++i) {
 		if (ctx.drm_fb_id[i])
 			drmModeRmFB(ctx.drm_card_fd, ctx.drm_fb_id[i]);
-		if (ctx.gbm_buffer[i])
-			gbm_bo_destroy(ctx.gbm_buffer[i]);
+		if (ctx.intel_buffer[i])
+		  drm_intel_bo_unreference(ctx.intel_buffer[i]);
 	}
 
 	drmModeFreeConnector(ctx.connector);
 	drmModeFreeEncoder(ctx.encoder);
 	drmModeFreeResources(ctx.resources);
-destroy_drm_gbm:
-	gbm_device_destroy(ctx.drm_gbm);
-close_vgem_card:
-	close(ctx.vgem_card_fd);
 close_drm_card:
 	close(ctx.drm_card_fd);
 fail:
